@@ -1,20 +1,13 @@
 import streamlit as st
 import fitz  # PyMuPDF
 import docx
-import re
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import CountVectorizer
 from sentence_transformers import SentenceTransformer, util
+import matplotlib.pyplot as plt
 
 # Load sentence transformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
-
-# Predefined skill keywords (can be expanded or replaced with NLP-based extraction)
-COMMON_SKILLS = [
-    "Python", "Java", "C++", "SQL", "JavaScript", "HTML", "CSS", "AWS", "Azure", "Docker", "Kubernetes",
-    "Agile", "Scrum", "JIRA", "Project Management", "Leadership", "Communication", "Testing", "Selenium",
-    "CI/CD", "Machine Learning", "Data Analysis", "DevOps", "REST", "API", "Git", "Linux", "Cloud"
-]
 
 # Extract text from PDF
 def extract_text_from_pdf(file):
@@ -38,62 +31,83 @@ def extract_text(file):
     else:
         return ""
 
-# Extract skills from text
-def extract_skills(text):
-    found_skills = set()
-    for skill in COMMON_SKILLS:
-        pattern = r'\b' + re.escape(skill) + r'\b'
-        if re.search(pattern, text, re.IGNORECASE):
-            found_skills.add(skill)
-    return found_skills
+# Extract skills from text using simple keyword matching
+def extract_skills(text, skill_keywords):
+    text_lower = text.lower()
+    return [skill for skill in skill_keywords if skill.lower() in text_lower]
 
-# Compute semantic similarity
-def compute_semantic_similarity(text1, text2):
-    embeddings = model.encode([text1, text2])
-    return float(util.cos_sim(embeddings[0], embeddings[1])[0])
+# Compute semantic similarity score
+def compute_semantic_similarity(resume_text, job_text):
+    embeddings = model.encode([resume_text, job_text])
+    return util.cos_sim(embeddings[0], embeddings[1]).item()
+
+# Compute skill match score
+def compute_skill_match(resume_skills, job_skills):
+    if not job_skills:
+        return 0
+    matched = set(resume_skills).intersection(set(job_skills))
+    return len(matched) / len(job_skills)
 
 # Streamlit UI
-st.title("📄 Generalized Resume Screening Tool")
+st.title("📄 Resume Screening Tool with Skill Matching and Visualization")
 
 st.sidebar.header("Upload Files")
 job_description_file = st.sidebar.file_uploader("Upload Job Description (PDF or DOCX)", type=["pdf", "docx"])
 resume_files = st.sidebar.file_uploader("Upload Resumes (PDF or DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
 
+# Define a sample skill list for demonstration
+skill_keywords = [
+    "Agile", "Scrum", "JIRA", "Leadership", "Project Management", "Stakeholder Communication",
+    "Python", "Java", "Selenium", "Test Automation", "CI/CD", "DevOps", "Machine Learning"
+]
+
 if job_description_file and resume_files:
     st.subheader("📋 Screening Results")
 
     job_description_text = extract_text(job_description_file)
-    jd_skills = extract_skills(job_description_text)
+    job_skills = extract_skills(job_description_text, skill_keywords)
 
     results = []
+    resume_names = []
+    final_scores = []
 
     for resume_file in resume_files:
         resume_text = extract_text(resume_file)
+        resume_skills = extract_skills(resume_text, skill_keywords)
+
         semantic_score = compute_semantic_similarity(resume_text, job_description_text)
+        skill_score = compute_skill_match(resume_skills, job_skills)
+        final_score = 0.6 * semantic_score + 0.4 * skill_score
 
-        resume_skills = extract_skills(resume_text)
-        matched_skills = resume_skills & jd_skills
-        missing_skills = jd_skills - resume_skills
+        matched_skills = list(set(resume_skills).intersection(set(job_skills)))
+        missing_skills = list(set(job_skills) - set(resume_skills))
 
-        skill_match_score = len(matched_skills) / len(jd_skills) if jd_skills else 0
-        final_score = 0.6 * semantic_score + 0.4 * skill_match_score
+        results.append((resume_file.name, final_score, matched_skills, missing_skills))
+        resume_names.append(resume_file.name)
+        final_scores.append(final_score)
 
-        results.append({
-            "name": resume_file.name,
-            "semantic_score": semantic_score,
-            "skill_match_score": skill_match_score,
-            "final_score": final_score,
-            "matched_skills": matched_skills,
-            "missing_skills": missing_skills
-        })
+    # Sort results by final score
+    results.sort(key=lambda x: x[1], reverse=True)
 
-    results.sort(key=lambda x: x["final_score"], reverse=True)
+    for name, score, matched, missing in results:
+        st.markdown(f"### {name}")
+        st.write(f"**Relevance Score:** {score:.2f}")
+        st.write("**✅ Matched Skills:**")
+        for skill in matched:
+            st.write(f"- {skill}")
+        st.write("**❌ Missing Skills:**")
+        for skill in missing:
+            st.write(f"- {skill}")
 
-    for res in results:
-        st.markdown(f"### {res['name']}")
-        st.write(f"**Relevance Score:** {res['final_score']:.2f}")
-        st.write(f"**✅ Matched Skills:** {', '.join(sorted(res['matched_skills'])) if res['matched_skills'] else 'None'}")
-        st.write(f"**❌ Missing Skills:** {', '.join(sorted(res['missing_skills'])) if res['missing_skills'] else 'None'}")
+    # Bar chart of scores
+    st.subheader("📊 Resume Relevance Scores")
+    fig, ax = plt.subplots()
+    ax.bar(resume_names, final_scores, color='skyblue')
+    ax.set_ylabel("Relevance Score")
+    ax.set_xlabel("Resume")
+    ax.set_title("Resume Relevance Scores")
+    plt.xticks(rotation=45, ha='right')
+    st.pyplot(fig)
 else:
     st.info("Please upload a job description and at least one resume to begin screening.")
 
