@@ -1,8 +1,20 @@
 import streamlit as st
 import fitz  # PyMuPDF
 import docx
-from sklearn.feature_extraction.text import CountVectorizer
+import re
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import CountVectorizer
+from sentence_transformers import SentenceTransformer, util
+
+# Load sentence transformer model
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Predefined skill keywords (can be expanded or replaced with NLP-based extraction)
+COMMON_SKILLS = [
+    "Python", "Java", "C++", "SQL", "JavaScript", "HTML", "CSS", "AWS", "Azure", "Docker", "Kubernetes",
+    "Agile", "Scrum", "JIRA", "Project Management", "Leadership", "Communication", "Testing", "Selenium",
+    "CI/CD", "Machine Learning", "Data Analysis", "DevOps", "REST", "API", "Git", "Linux", "Cloud"
+]
 
 # Extract text from PDF
 def extract_text_from_pdf(file):
@@ -26,14 +38,22 @@ def extract_text(file):
     else:
         return ""
 
-# Compute similarity score
-def compute_similarity(resume_text, job_text):
-    vectorizer = CountVectorizer().fit_transform([resume_text, job_text])
-    vectors = vectorizer.toarray()
-    return cosine_similarity([vectors[0]], [vectors[1]])[0][0]
+# Extract skills from text
+def extract_skills(text):
+    found_skills = set()
+    for skill in COMMON_SKILLS:
+        pattern = r'\b' + re.escape(skill) + r'\b'
+        if re.search(pattern, text, re.IGNORECASE):
+            found_skills.add(skill)
+    return found_skills
+
+# Compute semantic similarity
+def compute_semantic_similarity(text1, text2):
+    embeddings = model.encode([text1, text2])
+    return float(util.cos_sim(embeddings[0], embeddings[1])[0])
 
 # Streamlit UI
-st.title("📄 Resume Screening Tool")
+st.title("📄 Generalized Resume Screening Tool")
 
 st.sidebar.header("Upload Files")
 job_description_file = st.sidebar.file_uploader("Upload Job Description (PDF or DOCX)", type=["pdf", "docx"])
@@ -43,16 +63,37 @@ if job_description_file and resume_files:
     st.subheader("📋 Screening Results")
 
     job_description_text = extract_text(job_description_file)
+    jd_skills = extract_skills(job_description_text)
+
     results = []
 
     for resume_file in resume_files:
         resume_text = extract_text(resume_file)
-        score = compute_similarity(resume_text, job_description_text)
-        results.append((resume_file.name, score))
+        semantic_score = compute_semantic_similarity(resume_text, job_description_text)
 
-    results.sort(key=lambda x: x[1], reverse=True)
+        resume_skills = extract_skills(resume_text)
+        matched_skills = resume_skills & jd_skills
+        missing_skills = jd_skills - resume_skills
 
-    for name, score in results:
-        st.write(f"**{name}** - Relevance Score: {score:.2f}")
+        skill_match_score = len(matched_skills) / len(jd_skills) if jd_skills else 0
+        final_score = 0.6 * semantic_score + 0.4 * skill_match_score
+
+        results.append({
+            "name": resume_file.name,
+            "semantic_score": semantic_score,
+            "skill_match_score": skill_match_score,
+            "final_score": final_score,
+            "matched_skills": matched_skills,
+            "missing_skills": missing_skills
+        })
+
+    results.sort(key=lambda x: x["final_score"], reverse=True)
+
+    for res in results:
+        st.markdown(f"### {res['name']}")
+        st.write(f"**Relevance Score:** {res['final_score']:.2f}")
+        st.write(f"**✅ Matched Skills:** {', '.join(sorted(res['matched_skills'])) if res['matched_skills'] else 'None'}")
+        st.write(f"**❌ Missing Skills:** {', '.join(sorted(res['missing_skills'])) if res['missing_skills'] else 'None'}")
 else:
     st.info("Please upload a job description and at least one resume to begin screening.")
+
