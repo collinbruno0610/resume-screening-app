@@ -3,3 +3,4 @@ pymupdf
 python-docx
 scikit-learn
 sentence-transformers
+matplotlib
